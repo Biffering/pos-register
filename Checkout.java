@@ -1,6 +1,7 @@
-// STEP 3: The checkout window.
+// The checkout window (Step 3), with saved products and sales (Step 4).
 //
 // Run it with:   java Checkout.java
+// (run it from this folder, so it finds products.csv)
 //
 // - Click a product button to add it to the sale.
 // - Or type a product code in the box at the top and press Enter.
@@ -8,6 +9,12 @@
 // - Select a line and click "Remove One" to take one off.
 // - Click PAY, enter the cash the customer handed you, and the register
 //   works out the change and shows the receipt with its QR code.
+//
+// Saved between runs:
+// - products.csv      the products for sale. Edit it in any text editor or
+//                     spreadsheet, then restart the register.
+// - data/sales.csv    one line per finished sale. Receipt numbers carry on
+//                     from the last sale in here.
 //
 // This window is built with Swing, the window toolkit that comes with Java.
 
@@ -34,23 +41,20 @@ final String STORE_NAME = "MY STORE";
 final double TAX_RATE = 0.0825; // 8.25% sales tax
 final String SURVEY_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"; // ;)
 
-final List<Product> CATALOG = List.of(
-    new Product("1001", "Coffee",        199),
-    new Product("1002", "Tea",           179),
-    new Product("1003", "Orange Juice",  325),
-    new Product("2001", "Bagel",         249),
-    new Product("2002", "Muffin",        299),
-    new Product("2003", "Croissant",     275),
-    new Product("3001", "Bottled Water", 129),
-    new Product("3002", "Granola Bar",   159)
-);
+// Where the register keeps its files (inside the folder you run it from).
+final Path PRODUCTS_FILE = Path.of("products.csv");
+final Path SALES_FILE = Path.of("data", "sales.csv");
+final int FIRST_RECEIPT_NUMBER = 1001;
 
 // ---------- What the register is keeping track of ----------
+
+// The products for sale, loaded from products.csv when the register starts.
+List<Product> CATALOG;
 
 // The current sale: each product and how many of it.
 // A LinkedHashMap remembers the order things were added.
 final Map<Product, Integer> sale = new LinkedHashMap<>();
-int nextReceiptNumber = 1001;
+int nextReceiptNumber;
 
 // Parts of the window we need to update as the sale changes.
 JFrame window;
@@ -71,8 +75,113 @@ void main() {
     UIManager.put("TextField.font", BIG);
     UIManager.put("Button.font", NORMAL);
 
+    // Load the saved products, and find where receipt numbers left off.
+    try {
+        CATALOG = loadProducts();
+        nextReceiptNumber = findNextReceiptNumber();
+    } catch (IOException | IllegalArgumentException e) {
+        JOptionPane.showMessageDialog(null, "The register can't start:\n" + e.getMessage(),
+                "Problem with saved files", JOptionPane.ERROR_MESSAGE);
+        System.exit(1);
+    }
+
     // Swing wants windows built on its own "event thread"; invokeLater does that.
     SwingUtilities.invokeLater(this::buildWindow);
+}
+
+// ---------- Saved files: products and sales ----------
+
+// Reads products.csv. Each line is:  code,name,price   for example
+//   1001,Coffee,1.99
+// The first line is a header and is skipped, as are blank lines and lines
+// starting with #. If the file doesn't exist yet, it's created with a
+// starter list so there's something to edit.
+List<Product> loadProducts() throws IOException {
+    if (!Files.exists(PRODUCTS_FILE)) {
+        Files.writeString(PRODUCTS_FILE, """
+                code,name,price
+                1001,Coffee,1.99
+                1002,Tea,1.79
+                1003,Orange Juice,3.25
+                2001,Bagel,2.49
+                2002,Muffin,2.99
+                2003,Croissant,2.75
+                3001,Bottled Water,1.29
+                3002,Granola Bar,1.59
+                """);
+    }
+
+    List<Product> products = new ArrayList<>();
+    Set<String> codesSeen = new HashSet<>();
+    List<String> lines = Files.readAllLines(PRODUCTS_FILE);
+    for (int i = 1; i < lines.size(); i++) {          // i = 1 skips the header
+        String line = lines.get(i).trim();
+        if (line.isEmpty() || line.startsWith("#")) continue;
+        int lineNumber = i + 1;                       // what a text editor would show
+
+        // The code is before the first comma and the price after the last one,
+        // so a name like "Muffin, Blueberry" still works.
+        int first = line.indexOf(',');
+        int last = line.lastIndexOf(',');
+        if (first < 0 || first == last) {
+            throw new IllegalArgumentException(PRODUCTS_FILE + " line " + lineNumber
+                    + " should look like  1001,Coffee,1.99  but is:\n" + line);
+        }
+        String code = line.substring(0, first).trim();
+        String name = line.substring(first + 1, last).trim();
+        int price = parseCents(line.substring(last + 1));
+        if (code.isEmpty() || name.isEmpty() || price < 0) {
+            throw new IllegalArgumentException(PRODUCTS_FILE + " line " + lineNumber
+                    + " has a missing code or name, or a price that isn't a dollar amount:\n" + line);
+        }
+        if (!codesSeen.add(code)) {
+            throw new IllegalArgumentException(PRODUCTS_FILE + " line " + lineNumber
+                    + " uses code " + code + ", which is already used by another product.");
+        }
+        products.add(new Product(code, name, price));
+    }
+    if (products.isEmpty()) {
+        throw new IllegalArgumentException(PRODUCTS_FILE + " has no products in it.");
+    }
+    return products;
+}
+
+// Looks at the last saved sale and returns the number after it.
+int findNextReceiptNumber() throws IOException {
+    if (!Files.exists(SALES_FILE)) return FIRST_RECEIPT_NUMBER;
+    int highest = FIRST_RECEIPT_NUMBER - 1;
+    for (String line : Files.readAllLines(SALES_FILE)) {
+        String firstColumn = line.split(",", 2)[0].trim();
+        try {
+            highest = Math.max(highest, Integer.parseInt(firstColumn));
+        } catch (NumberFormatException e) {
+            // the header line, or something that isn't a sale: skip it
+        }
+    }
+    return highest + 1;
+}
+
+// Adds one line to data/sales.csv for a finished sale, for example:
+//   1001,2026-11-24 09:15:02,2x1001;1x2001,647,53,700,1000,300
+// Items are "how many x product code", and money is in cents, like
+// everywhere else in this program.
+void saveSale(int receiptNumber, int subtotal, int tax, int total, int cash) throws IOException {
+    StringBuilder items = new StringBuilder();
+    for (var line : sale.entrySet()) {
+        if (!items.isEmpty()) items.append(';');
+        items.append(line.getValue()).append('x').append(line.getKey().code());
+    }
+    String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+    String row = String.join(",", String.valueOf(receiptNumber), time, items.toString(),
+            String.valueOf(subtotal), String.valueOf(tax), String.valueOf(total),
+            String.valueOf(cash), String.valueOf(cash - total));
+
+    Files.createDirectories(SALES_FILE.getParent());
+    if (!Files.exists(SALES_FILE)) {
+        Files.writeString(SALES_FILE, "receipt,time,items,subtotal_cents,tax_cents,total_cents,cash_cents,change_cents\n");
+    }
+    // APPEND adds to the end of the file instead of replacing it.
+    Files.writeString(SALES_FILE, row + "\n", StandardOpenOption.APPEND);
 }
 
 // ---------- Building the window ----------
@@ -275,6 +384,13 @@ void pay() {
 
     int receiptNumber = nextReceiptNumber;
     nextReceiptNumber++;
+    try {
+        saveSale(receiptNumber, subtotal, tax, total, cash);
+    } catch (IOException e) {
+        JOptionPane.showMessageDialog(window,
+                "The sale went through, but it couldn't be saved to " + SALES_FILE + ":\n" + e.getMessage(),
+                "Sale not saved", JOptionPane.WARNING_MESSAGE);
+    }
     showReceipt(receiptNumber, receiptText(receiptNumber, subtotal, tax, total, cash));
 
     sale.clear(); // ready for the next customer

@@ -10,6 +10,8 @@ build/
 *.sqlite
 *.csv
 data/
+# ...but the product list is meant to be shared
+!products.csv
 
 # Passwords and private settings
 *.env
