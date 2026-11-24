@@ -1,0 +1,30 @@
+# Files git should never upload.
+
+# Compiled Java (rebuilt automatically from the .java files)
+*.class
+out/
+build/
+
+# Store data: real sales and customer records stay private
+*.db
+*.sqlite
+*.csv
+data/
+
+# Passwords and private settings
+*.env
+.env
+secrets.*
+config.local.*
+
+# Virtual machine disks and install images (far too big for GitHub)
+*.iso
+*.qcow2
+*.qcow2.xz
+*.vdi
+
+# Editor and system clutter
+.vscode/
+.idea/
+*.swp
+.DS_Store
